@@ -1,0 +1,153 @@
+<!-- templates/status.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcription Status</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Corrected stylesheet path -->
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white p-8 rounded-xl shadow-lg w-full max-w-2xl">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Transcription Status</h1>
+        
+        <!-- Loading State -->
+        <div id="loading-state" class="flex flex-col items-center justify-center text-center p-8 bg-gray-50 rounded-lg" style="display: {{ 'flex' if job_info.status != 'completed' and job_info.status != 'error' else 'none' }}">
+            <div class="loader ease-linear rounded-full border-8 border-t-8 border-gray-200 h-16 w-16 mb-4"></div>
+            <p class="text-gray-600 text-lg font-medium">Processing your file...</p>
+            <p class="text-gray-400 text-sm mt-2">This may take a few moments depending on the file size.</p>
+        </div>
+
+        <!-- Error State -->
+        <div id="error-state" class="flex flex-col items-center text-center p-8 bg-red-50 rounded-lg text-red-600" style="display: {{ 'flex' if job_info.status == 'error' else 'none' }}">
+            <h2 class="text-xl font-bold mb-2">Something went wrong!</h2>
+            <p id="error-message" class="text-sm">{{ job_info.error_message if job_info.error_message else 'An unexpected error occurred.' }}</p>
+        </div>
+
+        <!-- Completed State -->
+        <div id="completed-state" class="space-y-6" style="display: {{ 'block' if job_info.status == 'completed' else 'none' }}">
+            <h2 class="text-2xl font-bold text-gray-800 text-center mb-4">Transcription Complete</h2>
+            
+            <!-- Metadata -->
+            <div class="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">
+                <p class="text-blue-800 font-semibold">File Details:</p>
+                <ul class="text-blue-700 text-sm mt-2 space-y-1">
+                    <li id="file-name">Original Name: {{ job_info.original_filename }}</li>
+                    <li id="file-size">Size: {{ job_info.metadata.size }}</li>
+                    <li id="file-duration">Duration: {{ job_info.metadata.duration }}</li>
+                    <li id="file-language">Language: {{ job_info.metadata.language }}</li>
+                </ul>
+            </div>
+            
+            <!-- Summary -->
+            <div class="bg-gray-50 p-6 rounded-lg shadow-inner">
+                <h3 class="text-xl font-semibold text-gray-700 mb-3">AI-Powered Insights</h3>
+                <p id="descriptive-line" class="text-gray-600 mb-4 font-medium italic">
+                    {{ job_info.insights.descriptive_line if job_info.insights and job_info.insights.descriptive_line else 'No descriptive summary available.' }}
+                </p>
+                <div id="abstract-summary" class="text-gray-800 leading-relaxed prose prose-sm max-w-none">
+                    <p>{{ job_info.insights.abstract if job_info.insights and job_info.insights.abstract else 'No abstract summary available.' }}</p>
+                </div>
+            </div>
+            
+            <!-- Full Transcription -->
+            <div class="bg-gray-50 p-6 rounded-lg shadow-inner">
+                <h3 class="text-xl font-semibold text-gray-700 mb-3">Full Transcription</h3>
+                <div id="transcript-content" class="bg-white p-4 rounded-md border border-gray-200 h-64 overflow-y-auto text-gray-700 leading-relaxed whitespace-pre-wrap">
+                    Loading transcription...
+                </div>
+            </div>
+
+            <!-- Download Button -->
+            <div class="text-center mt-6">
+                <a id="download-button" href="/download/{{ file_id }}" target="_blank" class="inline-block bg-green-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md hover:bg-green-700 transition-colors duration-200">
+                    Download Transcript
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const fileId = "{{ file_id }}";
+            const loadingState = document.getElementById('loading-state');
+            const completedState = document.getElementById('completed-state');
+            const errorState = document.getElementById('error-state');
+            const errorMessage = document.getElementById('error-message');
+            const transcriptContent = document.getElementById('transcript-content');
+            
+            let pollInterval = null;
+
+            async function fetchStatus() {
+                try {
+                    const response = await fetch(`/api/status/${fileId}`);
+                    const data = await response.json();
+                    
+                    if (data.status === "completed") {
+                        if (pollInterval) clearInterval(pollInterval);
+                        loadingState.style.display = 'none';
+                        completedState.style.display = 'block';
+                        errorState.style.display = 'none';
+                        
+                        // Populate details from the final state
+                        document.getElementById('file-name').textContent = `Original Name: ${data.original_filename}`;
+                        document.getElementById('file-size').textContent = `Size: ${data.metadata.size}`;
+                        document.getElementById('file-duration').textContent = `Duration: ${data.metadata.duration}`;
+                        document.getElementById('file-language').textContent = `Language: ${data.metadata.language}`;
+                        
+                        // Populate insights
+                        if (data.insights && data.insights.descriptive_line) {
+                            document.getElementById('descriptive-line').textContent = data.insights.descriptive_line;
+                        }
+                        if (data.insights && data.insights.abstract) {
+                            document.getElementById('abstract-summary').innerHTML = `<p>${data.insights.abstract}</p>`;
+                        }
+
+                        // Fetch the full transcript separately
+                        fetch(`/download/${fileId}`)
+                            .then(res => res.text())
+                            .then(text => {
+                                transcriptContent.textContent = text;
+                            })
+                            .catch(err => {
+                                transcriptContent.textContent = "Failed to load transcription.";
+                                console.error('Failed to fetch transcript:', err);
+                            });
+                    } else if (data.status === "error") {
+                        if (pollInterval) clearInterval(pollInterval);
+                        loadingState.style.display = 'none';
+                        completedState.style.display = 'none';
+                        errorState.style.display = 'flex';
+                        if (errorMessage) {
+                            errorMessage.textContent = data.error_message || "An unexpected error occurred.";
+                        }
+                        console.error('Transcription job failed:', data.error_message);
+                    }
+                } catch (error) {
+                    if (pollInterval) clearInterval(pollInterval);
+                    console.error('Polling error:', error);
+                    loadingState.style.display = 'none';
+                    errorState.style.display = 'flex';
+                    if (errorMessage) {
+                        errorMessage.textContent = "Failed to connect to the server.";
+                    }
+                }
+            }
+
+            // Start polling every 3 seconds
+            pollInterval = setInterval(fetchStatus, 3000);
+            
+            // Initial call to fetch status immediately
+            fetchStatus();
+        });
+    </script>
+</body>
+</html>
