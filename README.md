@@ -87,6 +87,8 @@ ollama pull llama3
 ollama pull gemma
 # or
 ollama pull mistral
+# Currently using this below
+ollama run finalend/hermes-3-llama-3.1:8b
 ```
 ### Step 3: Install Python Dependencies
 ```bash
