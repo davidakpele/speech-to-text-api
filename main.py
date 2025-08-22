@@ -10,7 +10,6 @@ import re
 try:
     import magic
 except ImportError:
-    # Fallback for systems where python-magic isn't available
     magic = None
 from pathlib import Path
 from fastapi import Form
@@ -29,7 +28,7 @@ app = FastAPI(title="Audio Analysis API", version="2.0.0")
 # Mount the static directory for CSS and JS
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Configure Jinja2 templates to look in the 'templates' directory
+# Configure Jinja2 templates
 templates = Jinja2Templates(directory="templates")
 
 # Define directories for file storage and output
@@ -46,16 +45,15 @@ JOB_STATUS: Dict[str, Dict[str, Any]] = {}
 
 # Load the Whisper model globally
 try:
-    # Using a smaller model for faster processing, but you can change to "base" or "small"
+    # Using a smaller model for faster processing
     WHISPER_MODEL = whisper.load_model("tiny")
     print("✅ Whisper model loaded successfully")
 except Exception as e:
     print(f"❌ Failed to load Whisper model: {e}")
     WHISPER_MODEL = None
 
-# Configuration - Use your OpenLlama model
-# Corrected model name: Ollama references models by name, not file extension
-OLLAMA_MODEL = "llama3"  # Updated to a more commonly available model
+# Configuration - Model
+OLLAMA_MODEL = "finalend/hermes-3-llama-3.1:8b"
 
 # Language code mapping for better translation
 LANGUAGE_MAP = {
@@ -107,8 +105,8 @@ def extract_language_code(language_input: str) -> str:
     if len(language_input) == 2 and language_input in LANGUAGE_MAP.values():
         return language_input
     
-    # Map language name to code
-    return LANGUAGE_MAP.get(language_input, "en")  # Default to English
+    # Map language name to code & Default to English
+    return LANGUAGE_MAP.get(language_input, "en")
 
 def generate_comprehensive_summary(transcript: str, model: str = OLLAMA_MODEL):
     """
@@ -117,7 +115,6 @@ def generate_comprehensive_summary(transcript: str, model: str = OLLAMA_MODEL):
     # Check if the model is available, fall back to default if not
     if not check_ollama_model_available(model):
         print(f"Model {model} not available, trying default models")
-        # Try some common fallback models
         for fallback_model in ["llama3", "phi3", "mistral", "gemma"]:
             if check_ollama_model_available(fallback_model):
                 model = fallback_model
@@ -139,24 +136,23 @@ def generate_comprehensive_summary(transcript: str, model: str = OLLAMA_MODEL):
         6. OVERALL SENTIMENT: The general tone or sentiment of the content
         
         Transcript:
-        {transcript[:6000]}  # Limit to avoid token limits
+        {transcript[:6000]}  # Limit to avoid token limits
         
         Please format your response clearly with section headers.
         """
         
-        response = requests.post(
-            "http://localhost:11434/api/generate",
+        response = requests.post("http://localhost:11434/api/generate",
             json={
                 "model": model, 
                 "prompt": prompt, 
                 "stream": False,
-                "options": {
-                    "temperature": 0.3,  # Lower temperature for more focused responses
+                "options":{
+                    "temperature": 0.3,
                     "top_p": 0.9,
-                    "num_ctx": 4096  # Context window size
+                    "num_ctx": 4096
                 }
             },
-            timeout=300  # 5 minute timeout for longer processing
+            timeout=300 
         )
         response.raise_for_status()
         return response.json()["response"].strip()
@@ -185,7 +181,7 @@ def generate_short_summary(transcript: str, model: str = OLLAMA_MODEL):
                 "stream": False,
                 "options": {
                     "temperature": 0.5,
-                    "max_length": 200  # Limit response length
+                    "max_length": 200
                 }
             },
             timeout=120
@@ -248,7 +244,7 @@ def convert_audio_to_wav(input_path: Path, output_path: Path):
         command = [
             'ffmpeg', '-i', str(input_path.resolve()),
             '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1',
-            '-y',  # Overwrite output file if it exists
+            '-y',
             str(output_path.resolve())
         ]
         
@@ -257,7 +253,7 @@ def convert_audio_to_wav(input_path: Path, output_path: Path):
             check=True,
             capture_output=True,
             text=True,
-            timeout=300  # 5 minute timeout
+            timeout=300 
         )
         print("✅ Conversion successful.")
         return True
@@ -299,7 +295,7 @@ def translate_text(text: str, target_language_code: str, model: str = OLLAMA_MOD
                 "prompt": prompt, 
                 "stream": False,
                 "options": {
-                    "temperature": 0.1  # Very low temperature for literal translation
+                    "temperature": 0.1
                 }
             },
             timeout=300
@@ -307,9 +303,8 @@ def translate_text(text: str, target_language_code: str, model: str = OLLAMA_MOD
         response.raise_for_status()
         translated_text = response.json()["response"].strip()
         
-        # Clean up the response (sometimes models add explanations)
+        # Clean up the response
         if "Here is the translation" in translated_text:
-            # Extract just the translated part
             lines = translated_text.split('\n')
             for i, line in enumerate(lines):
                 if line.strip() and not line.startswith("Here is"):
@@ -359,7 +354,7 @@ def extract_key_insights(transcript: str, model: str = OLLAMA_MODEL):
                 # Clean up the bullet point
                 insight = re.sub(r'^[-•*]\s*', '', line)
                 insights.append(insight)
-            elif line and len(insights) < 5:  # Limit to 5 insights max
+            elif line and len(insights) < 5:
                 insights.append(line)
         
         return insights if insights else ["No specific insights could be extracted"]
@@ -511,7 +506,7 @@ async def create_upload_file(
             "duration": "Calculating...",
             "format": "Detecting...",
             "detected_language": "Detecting...",
-            "target_language": target_language  # Store the target language here
+            "target_language": target_language
         },
         "insights": {
             "comprehensive_summary": "Generating...",
@@ -519,7 +514,7 @@ async def create_upload_file(
             "key_insights": []
         },
         "transcript_path": None,
-        "translated_transcript_path": None,  # Add a new path for the translated file
+        "translated_transcript_path": None,
         "summary_path": None,
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S")
     }
@@ -550,7 +545,7 @@ async def api_get_status(file_id: str):
     # Remove local paths for security
     response_data.pop("audio_path", None)
     response_data.pop("transcript_path", None)
-    response_data.pop("translated_transcript_path", None)  # Remove the new path
+    response_data.pop("translated_transcript_path", None)
     response_data.pop("summary_path", None)
     
     # Add download URLs
