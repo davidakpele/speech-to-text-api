@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcription Status</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white p-8 rounded-xl shadow-lg w-full max-w-2xl">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Transcription Status</h1>
+        
+        <div id="loading-state" class="flex flex-col items-center justify-center text-center p-8 bg-gray-50 rounded-lg" style="display: {{ 'flex' if job_info.status != 'completed' and job_info.status != 'error' else 'none' }}">
+            <div class="loader ease-linear rounded-full border-8 border-t-8 border-gray-200 h-16 w-16 mb-4"></div>
+            <p class="text-gray-600 text-lg font-medium">Processing your file...</p>
+            <p class="text-gray-400 text-sm mt-2">This may take a few moments depending on the file size.</p>
+        </div>
+
+        <div id="error-state" class="flex flex-col items-center text-center p-8 bg-red-50 rounded-lg text-red-600" style="display: {{ 'flex' if job_info.status == 'error' else 'none' }}">
+            <h2 class="text-xl font-bold mb-2">Something went wrong!</h2>
+            <p id="error-message" class="text-sm">{{ job_info.error_message if job_info.error_message else 'An unexpected error occurred.' }}</p>
+        </div>
+
+        <div id="completed-state" class="space-y-6" style="display: {{ 'block' if job_info.status == 'completed' else 'none' }}">
+            <h2 class="text-2xl font-bold text-gray-800 text-center mb-4">Transcription Complete</h2>
+            
+            <div class="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">
+                <p class="text-blue-800 font-semibold">File Details:</p>
+                <ul class="text-blue-700 text-sm mt-2 space-y-1">
+                    <li id="file-name">Original Name: {{ job_info.original_filename }}</li>
+                    <li id="file-size">Size: {{ job_info.metadata.size }}</li>
+                    <li id="file-duration">Duration: {{ job_info.metadata.duration }}</li>
+                    <li id="detected-language">Detected Language: {{ job_info.metadata.detected_language }}</li>
+                    <li id="translated-language" style="display: none;">Translated Language: {{ job_info.metadata.target_language }}</li>
+                </ul>
+            </div>
+            
+            <div class="bg-gray-50 p-6 rounded-lg shadow-inner">
+                <h3 class="text-xl font-semibold text-gray-700 mb-3">AI-Powered Insights</h3>
+                <div class="space-y-4 text-gray-800">
+                    <div>
+                        <p class="font-semibold text-gray-700">Comprehensive Summary:</p>
+                        <p id="comprehensive-summary" class="prose prose-sm max-w-none text-gray-800 leading-relaxed mt-1">No comprehensive summary available.</p>
+                    </div>
+                    <div>
+                        <p class="font-semibold text-gray-700">Short Summary:</p>
+                        <p id="short-summary" class="prose prose-sm max-w-none text-gray-800 leading-relaxed mt-1">No short summary available.</p>
+                    </div>
+                    <div>
+                        <p class="font-semibold text-gray-700">Key Insights:</p>
+                        <ul id="key-insights" class="list-disc list-inside space-y-1 prose prose-sm max-w-none text-gray-800 leading-relaxed mt-1">
+                                                    </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="bg-gray-50 p-6 rounded-lg shadow-inner">
+                <h3 class="text-xl font-semibold text-gray-700 mb-3">Full Transcription</h3>
+                <div class="flex items-center space-x-4 mb-4" id="transcript-toggle-buttons">
+                    <button id="original-transcript-btn" class="px-4 py-2 bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300">Original</button>
+                    <button id="translated-transcript-btn" class="px-4 py-2 bg-gray-100 text-gray-500 font-semibold rounded-lg hover:bg-gray-200" style="display: none;">Translated</button>
+                </div>
+                <div id="transcript-content" class="bg-white p-4 rounded-md border border-gray-200 h-64 overflow-y-auto text-gray-700 leading-relaxed whitespace-pre-wrap">
+                    Loading transcription...
+                </div>
+            </div>
+
+            <div class="text-center mt-6 space-x-4">
+                <a id="download-transcript-btn" href="/download/transcript/{{ file_id }}" target="_blank" class="inline-block bg-green-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md hover:bg-green-700 transition-colors duration-200">
+                    Download Original
+                </a>
+                <a id="download-translated-btn" href="#" target="_blank" class="inline-block bg-indigo-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md hover:bg-indigo-700 transition-colors duration-200" style="display: none;">
+                    Download Translated
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const fileId = "{{ file_id }}";
+            const loadingState = document.getElementById('loading-state');
+            const completedState = document.getElementById('completed-state');
+            const errorState = document.getElementById('error-state');
+            const errorMessage = document.getElementById('error-message');
+            const transcriptContent = document.getElementById('transcript-content');
+            const originalTranscriptBtn = document.getElementById('original-transcript-btn');
+            const translatedTranscriptBtn = document.getElementById('translated-transcript-btn');
+            const downloadTranscriptBtn = document.getElementById('download-transcript-btn');
+            const downloadTranslatedBtn = document.getElementById('download-translated-btn');
+            
+            let pollInterval = null;
+            let originalTranscriptText = '';
+            let translatedTranscriptText = '';
+
+            // Function to fetch and display the transcript content
+            async function fetchAndDisplayTranscripts() {
+                try {
+                    // Fetch original transcript
+                    const originalRes = await fetch(`/download/transcript/${fileId}`);
+                    originalTranscriptText = await originalRes.text();
+                    transcriptContent.textContent = originalTranscriptText;
+
+                    // Check for and fetch translated transcript
+                    const statusRes = await fetch(`/api/status/${fileId}`);
+                    const statusData = await statusRes.json();
+                    
+                    if (statusData.translated_transcript_download_url) {
+                        translatedTranscriptBtn.style.display = 'inline-block';
+                        downloadTranslatedBtn.style.display = 'inline-block';
+                        downloadTranslatedBtn.href = statusData.translated_transcript_download_url;
+
+                        const translatedRes = await fetch(statusData.translated_transcript_download_url);
+                        translatedTranscriptText = await translatedRes.text();
+                    }
+
+                } catch (err) {
+                    console.error('Failed to fetch transcripts:', err);
+                    transcriptContent.textContent = "Failed to load transcription.";
+                }
+            }
+            
+            // Event listeners for the buttons
+            originalTranscriptBtn.addEventListener('click', () => {
+                transcriptContent.textContent = originalTranscriptText;
+                originalTranscriptBtn.classList.add('bg-gray-200', 'text-gray-700');
+                translatedTranscriptBtn.classList.remove('bg-gray-200', 'text-gray-700');
+            });
+
+            translatedTranscriptBtn.addEventListener('click', () => {
+                transcriptContent.textContent = translatedTranscriptText;
+                translatedTranscriptBtn.classList.add('bg-gray-200', 'text-gray-700');
+                originalTranscriptBtn.classList.remove('bg-gray-200', 'text-gray-700');
+            });
+
+            async function fetchStatus() {
+                try {
+                    const response = await fetch(`/api/status/${fileId}`);
+                    const data = await response.json();
+                    
+                    if (data.status === "completed") {
+                        if (pollInterval) clearInterval(pollInterval);
+                        loadingState.style.display = 'none';
+                        completedState.style.display = 'block';
+                        errorState.style.display = 'none';
+                        
+                        // Populate details from the final state
+                        document.getElementById('file-name').textContent = `Original Name: ${data.original_filename}`;
+                        document.getElementById('file-size').textContent = `Size: ${data.metadata.size}`;
+                        document.getElementById('file-duration').textContent = `Duration: ${data.metadata.duration}`;
+                        
+                        // Update language names
+                        const LANGUAGE_MAP = {
+                            "es": "Spanish", "en": "English", "fr": "French", "de": "German", "it": "Italian", "pt": "Portuguese",
+                            "zh": "Chinese", "ja": "Japanese", "ko": "Korean", "ru": "Russian", "ar": "Arabic", "hi": "Hindi"
+                        };
+                        document.getElementById('detected-language').textContent = `Detected Language: ${LANGUAGE_MAP[data.metadata.detected_language] || data.metadata.detected_language}`;
+                        document.getElementById('translated-language').textContent = `Translated Language: ${LANGUAGE_MAP[data.metadata.target_language] || data.metadata.target_language}`;
+                        if (data.metadata.detected_language !== data.metadata.target_language) {
+                            document.getElementById('translated-language').style.display = 'list-item';
+                        }
+
+                        // Populate all insights
+                        const insights = data.insights;
+                        
+                        // Comprehensive Summary
+                        document.getElementById('comprehensive-summary').textContent = insights.comprehensive_summary || 'No comprehensive summary available.';
+                        
+                        // Short Summary
+                        document.getElementById('short-summary').textContent = insights.short_summary || 'No short summary available.';
+
+                        // Key Insights
+                        const keyInsightsList = document.getElementById('key-insights');
+                        keyInsightsList.innerHTML = '';
+                        if (insights.key_insights && insights.key_insights.length > 0) {
+                            insights.key_insights.forEach(insight => {
+                                const li = document.createElement('li');
+                                li.innerHTML = insight;
+                                keyInsightsList.appendChild(li);
+                            });
+                        } else {
+                            keyInsightsList.innerHTML = '<li>No key insights available.</li>';
+                        }
+
+                        fetchAndDisplayTranscripts();
+
+                    } else if (data.status === "error") {
+                        if (pollInterval) clearInterval(pollInterval);
+                        loadingState.style.display = 'none';
+                        completedState.style.display = 'none';
+                        errorState.style.display = 'flex';
+                        if (errorMessage) {
+                            errorMessage.textContent = data.error_message || "An unexpected error occurred.";
+                        }
+                        console.error('Transcription job failed:', data.error_message);
+                    }
+                } catch (error) {
+                    if (pollInterval) clearInterval(pollInterval);
+                    console.error('Polling error:', error);
+                    loadingState.style.display = 'none';
+                    errorState.style.display = 'flex';
+                    if (errorMessage) {
+                        errorMessage.textContent = "Failed to connect to the server.";
+                    }
+                }
+            }
+
+            // Start polling every 3 seconds
+            pollInterval = setInterval(fetchStatus, 3000);
+            
+            // Initial call to fetch status immediately
+            fetchStatus();
+        });
+    </script>
+</body>
+</html>
