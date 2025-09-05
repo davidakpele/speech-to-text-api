@@ -4,19 +4,23 @@ import os
 import json
 import time
 from pathlib import Path
-from fastapi import Form, UploadFile, File, Request, BackgroundTasks, HTTPException, APIRouter
+from fastapi import Depends, Form, UploadFile, File, Request, BackgroundTasks, HTTPException, APIRouter
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 import requests
-
-# Import services, models, and utilities
+from sqlalchemy.orm import Session
+from app.api.dependencies import get_current_user
 from app.config import settings
+from app.database import get_db
 from app.models.audio import AudioMetadata
 from app.models.job import JobStatus
+from app.models.users import User
 from app.services.transcription import transcription_service
 from app.services.translation import translation_service
 from app.services.analysis import analysis_service
 from app.tasks.audio_processing import update_job_status_in_redis
+from app.utils.jwt_service import create_access_token
+from app.utils.password_helper import hash_password, validate_email, verify_password
 from app.utils.redis_client import get_all_jobs, redis_client, get_job_status
 from app.utils.file_handlers import get_file_metadata, convert_audio_to_wav
 from app.utils.validators import extract_language_code
@@ -189,18 +193,16 @@ def process_audio_file_task(file_id: str):
         except Exception as e:
             print(f"Warning: Error cleaning up WAV file: {e}")
 
-
-
 @router.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    """Serves the main file upload page."""
+async def home(request: Request, current_user: dict = Depends(get_current_user)):
     return templates.TemplateResponse("upload.html", {"request": request})
 
 @router.post("/upload", response_class=HTMLResponse)
 async def create_upload_file(
     background_tasks: BackgroundTasks, 
     file: UploadFile = File(...), 
-    target_language: str = Form(default="none") 
+    target_language: str = Form(default="none"),
+    current_user: dict = Depends(get_current_user)
 ):
     """Handles audio file upload and starts a background task."""
     file_id = str(uuid.uuid4())
@@ -252,7 +254,7 @@ async def get_status(request: Request, file_id: str):
     )
 
 @router.get("/api/status/{file_id}")
-async def api_get_status(file_id: str):
+async def api_get_status(file_id: str,  current_user: dict = Depends(get_current_user)):
     """API endpoint for client-side polling."""
     job_info = JOB_STATUS.get(file_id)
     if not job_info:
@@ -276,7 +278,7 @@ async def api_get_status(file_id: str):
     return response_data
 
 @router.get("/download/transcript/{file_id}")
-async def download_transcript(file_id: str):
+async def download_transcript(file_id: str,  current_user: dict = Depends(get_current_user)):
     """Download the transcription text file."""
     transcript_path = settings.OUTPUT_DIR / f"{file_id}.txt"
     if not transcript_path.exists():
@@ -289,7 +291,7 @@ async def download_transcript(file_id: str):
     )
 
 @router.get("/download/summary/{file_id}")
-async def download_summary(file_id: str):
+async def download_summary(file_id: str,  current_user: dict = Depends(get_current_user)):
     """Download the summary JSON file."""
     summary_path = settings.SUMMARY_DIR / f"{file_id}.json"
     if not summary_path.exists():
@@ -302,7 +304,7 @@ async def download_summary(file_id: str):
     )
 
 @router.get("/download/translated_transcript/{file_id}")
-async def download_translated_transcript(file_id: str):
+async def download_translated_transcript(file_id: str,  current_user: dict = Depends(get_current_user)):
     """Download the translated transcription text file."""
     job_info = JOB_STATUS.get(file_id)
     if not job_info or not job_info.translated_transcript_path:
@@ -343,14 +345,14 @@ async def health_check():
     }
 
 @router.get("/jobs/{job_id}", response_model=JobStatus)
-def read_job(job_id: str):
+def read_job(job_id: str,  current_user: dict = Depends(get_current_user)):
     job_json = get_job_status(job_id)
     if not job_json:
         raise HTTPException(status_code=404, detail="Job not found")
     return JobStatus(**json.loads(job_json))
 
 @router.get("/jobs", response_model=list[JobStatus])
-def list_jobs():
+def list_jobs(current_user: dict = Depends(get_current_user)):
     """
     List all jobs currently saved in Redis.
     """
@@ -367,3 +369,105 @@ def list_jobs():
                 continue  # Skip corrupted jobs
 
     return jobs
+
+@router.post("/auth/register")
+async def register(request: Request):
+    data = await request.json()
+
+    username = data.get("username")
+    email = data.get("email")
+    password = data.get("password")
+
+    # validation
+    if not username or len(username) < 3:
+        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+    if not email or not validate_email(email):
+        raise HTTPException(status_code=400, detail="Invalid email")
+    if not password or len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    # check if email or username already exists
+    if redis_client.sismember("emails", email) or redis_client.sismember("usernames", username):
+        raise HTTPException(status_code=400, detail="User with this email or username already exists")
+
+    # create user
+    user_id = str(uuid.uuid4())
+    user_key = f"user:{user_id}"
+
+    redis_client.hset(user_key, mapping={
+        "id": user_id,
+        "username": username,
+        "email": email,
+        "password": hash_password(password),
+    })
+
+    # maintain lookup sets
+    redis_client.sadd("users", user_id)
+    redis_client.sadd("emails", email)
+    redis_client.sadd("usernames", username)
+
+    return {"message": "User registered successfully", "user_id": user_id}
+
+# ---------------- LOGIN ----------------
+@router.post("/auth/login")
+async def login(request: Request):
+    data = await request.json()
+
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not validate_email(email):
+        raise HTTPException(status_code=400, detail="Invalid email")
+    if not password or len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    # find user by email
+    user = None
+    for uid in redis_client.smembers("users"):
+        u = redis_client.hgetall(f"user:{uid}")
+        if u and u.get("email") == email:
+            user = u
+            break
+
+    if not user or not verify_password(password, user["password"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    access_token = create_access_token(
+        data={"sub": user["id"], "name": user["username"]},
+        role={"admin": True}
+    )
+
+    return {
+        "access_token": access_token,
+        "id": user["id"],
+        "username": user["username"],
+        "email": user["email"]
+    }
+
+# ---------------- RESET PASSWORD ----------------
+@router.post("/auth/reset-password")
+async def reset_password(request: Request):
+    data = await request.json()
+
+    email = data.get("email")
+    new_password = data.get("new_password")
+
+    if not email or not validate_email(email):
+        raise HTTPException(status_code=400, detail="Invalid email")
+    if not new_password or len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    # find user
+    user_id = None
+    for uid in redis_client.smembers("users"):
+        u = redis_client.hgetall(f"user:{uid}")
+        if u and u.get("email") == email:
+            user_id = uid
+            break
+
+    if not user_id:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    redis_client.hset(f"user:{user_id}", "password", hash_password(new_password))
+    return {"message": "Password reset successfully"}
+
